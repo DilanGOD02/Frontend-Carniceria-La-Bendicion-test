@@ -1,0 +1,193 @@
+# .github/workflows/ci-cd.yml
+name: CI/CD Pipeline - TipoPago Tests
+
+on:
+  push:
+    branches: [ DEV-QA, main ]
+  pull_request:
+    branches: [ DEV-QA, main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+    
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        
+    - name: Instalar dependencias
+      run: |
+        npm ci
+        
+    - name: Ejecutar linting
+      run: |
+        npm run lint || echo "Lint no configurado"
+        
+    - name: Ejecutar pruebas unitarias
+      run: |
+        npm run test:unit
+      env:
+        CI: true
+        
+    - name: Ejecutar pruebas de integración
+      run: |
+        npm run test:integration
+      env:
+        CI: true
+        REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
+        
+    - name: Generar reporte de cobertura
+      run: |
+        npm run test:coverage
+        
+    - name: Subir cobertura a Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage/lcov.info
+        flags: unittests
+        name: codecov-umbrella
+        
+    - name: Construir aplicación
+      run: |
+        npm run build
+        
+    - name: Enviar notificación de éxito
+      if: success()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: '✅ Pruebas pasaron exitosamente en rama ${{ github.ref }}'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+        
+    - name: Enviar notificación de fallo
+      if: failure()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        text: '❌ Pruebas fallaron en rama ${{ github.ref }}'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  deploy-staging:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/dev-qa' && github.event_name == 'push'
+    
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Instalar dependencias
+      run: npm ci
+      
+    - name: Construir para staging
+      run: npm run build
+      env:
+        REACT_APP_API_URL: ${{ secrets.STAGING_API_URL }}
+        
+    - name: Desplegar a staging via FTP
+      uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+      with:
+        server: ${{ secrets.STAGING_FTP_SERVER }}
+        username: ${{ secrets.STAGING_FTP_USERNAME }}
+        password: ${{ secrets.STAGING_FTP_PASSWORD }}
+        local-dir: ./build/
+        server-dir: /public_html/staging/
+        
+    - name: Enviar email - Deploy staging exitoso
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "✅ Deploy a Staging Exitoso - TipoPago"
+        to: ${{ secrets.NOTIFY_EMAIL }}
+        from: ${{ secrets.EMAIL_USERNAME }}
+        html_body: |
+          <h2>Deploy a Staging Completado</h2>
+          <p><strong>Proyecto:</strong> Sistema TipoPago</p>
+          <p><strong>Rama:</strong> ${{ github.ref }}</p>
+          <p><strong>Commit:</strong> ${{ github.sha }}</p>
+          <p><strong>URL Staging:</strong> ${{ secrets.STAGING_URL }}</p>
+          <p><strong>Fecha:</strong> ${{ github.event.head_commit.timestamp }}</p>
+
+  deploy-production:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Instalar dependencias
+      run: npm ci
+      
+    - name: Construir para producción
+      run: npm run build
+      env:
+        REACT_APP_API_URL: ${{ secrets.PRODUCTION_API_URL }}
+        
+    - name: Desplegar a producción via FTP
+      uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+      with:
+        server: ${{ secrets.PRODUCTION_FTP_SERVER }}
+        username: ${{ secrets.PRODUCTION_FTP_USERNAME }}
+        password: ${{ secrets.PRODUCTION_FTP_PASSWORD }}
+        local-dir: ./build/
+        server-dir: /public_html/
+        
+    - name: Enviar email - Deploy producción exitoso
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "🚀 Deploy a Producción Exitoso - TipoPago"
+        to: ${{ secrets.NOTIFY_EMAIL }}
+        from: ${{ secrets.EMAIL_USERNAME }}
+        html_body: |
+          <h2>Deploy a Producción Completado</h2>
+          <p><strong>Proyecto:</strong> Sistema TipoPago</p>
+          <p><strong>Rama:</strong> main</p>
+          <p><strong>Commit:</strong> ${{ github.sha }}</p>
+          <p><strong>URL Producción:</strong> ${{ secrets.PRODUCTION_URL }}</p>
+          <p><strong>Fecha:</strong> ${{ github.event.head_commit.timestamp }}</p>
+          
+    - name: Crear release tag
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.run_number }}
+        release_name: Release v${{ github.run_number }}
+        body: |
+          Despliegue automático a producción
+          Commit: ${{ github.sha }}
+        draft: false
+        prerelease: false
