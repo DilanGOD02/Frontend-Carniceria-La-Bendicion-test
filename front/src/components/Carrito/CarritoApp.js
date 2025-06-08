@@ -88,7 +88,7 @@ function CarritoApp() {
       });
   
     } catch (error) {
-      console.error('Error en el pago:', error);
+      console.error('Error en el pago test:', error);
       alert(error.response?.data?.message || 'Error al procesar el pago');
     }
   };
